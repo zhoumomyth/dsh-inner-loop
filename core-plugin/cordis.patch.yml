@@ -1,0 +1,15 @@
+# dsh-inner-loop · 插件装配声明
+#
+# 这个文件必须存在，且文件名要和 package.json 里的
+#   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+# 完全对上。
+#
+# 少了它的后果（真实踩过）：DSH 读完 package.json 去找 patch 文件，
+# 找不到 → 插件静默不加载 → 用户装完了发现「毫无反应」，
+# 而且日志里可能只有一行容易被忽略的 warn。
+#
+# id / name 必须与 lib/index.js 的 `export const name` 一致。
+
+- insert:
+    - id: dsh-inner-loop
+      name: dsh-inner-loop

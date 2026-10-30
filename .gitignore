@@ -1,0 +1,73 @@
+# ── 依赖（绝不许进仓库；也防止 npm pack 时被几万个文件刷屏）──
+node_modules/
+.pnpm-store/
+.pnpm/
+/**/node_modules/
+
+# ── 日志与临时 ──
+*.log
+logs/
+tmp/
+tmp_*
+temp/
+*.tmp
+*.temp
+*.pid
+pack-list.txt
+
+# ── 备份（本项目明令：备份不进仓库，改用带日期的备份目录）──
+*.bak
+*.bak_*
+*.bak-*
+*.orig
+*.rej
+*~
+*.swp
+
+# ── 真实数据：这套系统的账本与流水，永远不进仓库 ──
+索引.md
+索引_冷区.md
+全局记忆.md
+系统警报.md
+检索证据/
+事件/
+*.jsonl
+健康度月报.md
+变更日志.md
+待修订.md
+维护手册.md
+principles.md
+破甲核心.md
+破甲范围声明.md
+
+# ── 个人内容（占位符替换后仍可能残留的）──
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+!docs/assets/*
+!docs/assets/**/*.png
+
+# ── 环境与凭据 ──
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+*secret*
+
+# ── 系统 / 编辑器 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.code-workspace
+
+# ── 构建产物 ──
+dist/
+build/
+coverage/
+*.tsbuildinfo
