@@ -66,8 +66,11 @@ desktop.ini
 .idea/
 *.code-workspace
 
-# ── 构建产物 ──
+# ── 构建产物（tarball 挂 Release，不进仓库）──
 dist/
 build/
 coverage/
 *.tsbuildinfo
+
+# npm/pnpm 打包产物：只在 Release 挂，不进仓库
+*.tgz
