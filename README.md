@@ -22,8 +22,10 @@
 ## 30 秒跑起来（How）
 
 ```bash
-# 1. 装插件
-pnpm add dsh-inner-loop          # 或 npm i dsh-inner-loop
+# 1. 装插件（三者任选，包本身不绑定包管理器）
+pnpm add dsh-inner-loop
+npm  install dsh-inner-loop
+yarn add dsh-inner-loop
 
 # 2. 把骨架模板放进你的全局指令文件，替换里面的 <占位符>
 cp rules-template/AGENTS.template.md  ~/.dsh/AGENTS.md
