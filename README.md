@@ -36,6 +36,15 @@ cp rules-template/behavior-rules.md   ~/.dsh/记忆库/规则/
 node tools/healthcheck.mjs
 ```
 
+> ⚠️ **`healthcheck.mjs` 检查的是「你当前所在的环境」** —— 它默认读**当前操作系统**的家目录
+> （`$HOME/.dsh` 或 `%USERPROFILE%\.dsh`，可用 `DSH_HOME` / `DSH_MEMORY_HOME` 覆盖）。
+> **如果你在 A 环境开发、B 环境部署，请在「部署环境」里跑它**，否则它检查的是开发机。
+>
+> 跨平台说明：
+> - Windows：`node tools\healthcheck.mjs`
+> - Linux / macOS：`node tools/healthcheck.mjs`
+> - 脚本内部**不依赖任何 shell 命令**（全部用 Node API），换平台不用改。
+
 **没有第 5 步。** 它不需要数据库、不需要向量模型、不联网 —— 全靠几个 `.md` 文件。
 
 ---
@@ -152,8 +161,12 @@ core-plugin/       插件本体（7 个模块，单向依赖无环）
   lib/distill.js     抽结论（三道闸）
   lib/index.js       装配 + 两个钩子（唯一顶层）
 rules-template/    规矩模板（不含任何真实内容）
-tools/             体检、重建账本、watchdog 设计
-docs/              隐私清单、DIY 指南、架构说明
+  AGENTS.template.md   骨架模板（占位符化，≤7KB）
+  behavior-rules.md    A1/A3/A5/A6/A7 细则
+  layering.md          该放哪一层：四问 / 容量阀门 / 强制证据
+  PLACEHOLDERS.md      占位符对照 + 脱敏自查
+tools/             独立体检（22 项，跨平台）
+docs/              PRIVACY（隐私清单）· ARCHITECTURE（为什么这么设计）· EXTENSIONS（可选扩展）
 tests/             三套测试 + 依赖图谱检查
 ```
 
