@@ -127,9 +127,20 @@ export const Config = Schema.object({
   scopeProvider: Schema.string().default('').description('可选：自定义作用域解析模块（相对路径或包名）。实现 resolve(sessionId) => scope。留空 = 永远是 defaultScope。'),
   manualTextPatterns: Schema.array(Schema.string()).default([]).description('可选：识别「宿主插件注入的说明文本」的正则片段数组。留空 = 不识别。设错会导致把真对话当注入文本丢掉，动它之前先读 docs/DIY_GUIDE.md。'),
 
+  /* ── 动态规则路由（雷达） ── */
+  radar: Schema.boolean().default(true).description('每轮是否按意图把对应的细则清单拍进上下文（A3 写代码 / A5 报数 / A6 高危 / A7 判重）。关掉 = 只注入自检与检索。'),
+  radarMaxPoints: Schema.number().default(5).description('一轮最多注入几条核心问句。多条规则同时命中时按融合池去重后截断，上限 5。'),
+  radarTerse: Schema.boolean().default(true).description('连续几步没出事是否自动精简清单（只留标题 + 第 1 条）。任何工具报错 / 语法错误 / 被 deny 立刻恢复全量。'),
+  radarCalmSteps: Schema.number().default(3).description('连续几步都正常才进精简模式。判据是「有没有出事」，不是「跑了几步」。'),
+
   /* ── 警报 ── */
   alarmThrottleMs: Schema.number().default(600000).description('同一个错误签名多久内只记一次。默认 10 分钟。设 0 = 每次都记（碎片多的时候会刷屏）。'),
   alarmMaxEntries: Schema.number().default(200).description('警报文件超过多少条时滚动，只保留最近 100 条。防止无限增长。'),
+
+  /* ── 物理拦截（默认关闭） ── */
+  enforce: Schema.boolean().default(false).description('写工具执行前，检查模型有没有答 A3 清单；没答够就 deny。**默认关**：它在实机上把「备份 / 改文件 / 重启」也拦了，连开锁的钥匙一起锁住。想用再打开。'),
+  enforceLimit: Schema.number().default(3).description('连续被拒几次后回收写入权限。只在不放行的情况下生效。'),
+  safeReadonlyPrefixes: Schema.array(Schema.string()).default([]).description('一级白名单之外、你自己确认过安全的只读命令前缀（正则片段，如 netstat）。'),
 });
 
 export const DEFAULTS = {
@@ -146,8 +157,15 @@ export const DEFAULTS = {
   duplicateMinCommon: 12,
   defaultScope: 'default',
   globalScope: 'global',
+  radar: true,
+  radarMaxPoints: 5,
+  radarTerse: true,
+  radarCalmSteps: 3,
   alarmThrottleMs: 600000,
   alarmMaxEntries: 200,
+  enforce: false,
+  enforceLimit: 3,
+  safeReadonlyPrefixes: [],
 };
 
 /**

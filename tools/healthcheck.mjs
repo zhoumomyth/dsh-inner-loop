@@ -49,9 +49,19 @@ const NODE = process.execPath;
 const rows = [];
 let fatal = 0;
 let warn = 0;
+let info = 0;
 const ok = (n, d = '') => rows.push({ s: '✅', n, d });
 const wa = (n, d = '') => { warn += 1; rows.push({ s: '⚠️', n, d }); };
 const no = (n, d = '') => { fatal += 1; rows.push({ s: '❌', n, d }); };
+/** ℹ️ 只做提示，不进 warn、不影响退出码。 */
+const inf = (n, d = '') => { info += 1; rows.push({ s: 'ℹ️', n, d }); };
+
+/**
+ * 已知良性条目：命中了也不算未处理故障。
+ * `@deepseek-ai/dsh-llm` 是可选依赖 —— 缺了就降级走 fallback 构造，功能不降级。
+ * 2026-10-31 定为 ℹ️：之前每次体检都报 ⚠️，属于噪音。
+ */
+const BENIGN_ALARM_RE = /loadMessageFactory.*(?:Cannot find package|@deepseek-ai\/dsh-llm)/;
 
 /* ── 1. 运行时 ──────────────────────────────────────── */
 const major = Number(process.versions.node.split('.')[0]);
@@ -169,9 +179,12 @@ if (!PLUGIN) {
 /* ── 6. 警报文件 ────────────────────────────────────── */
 if (existsSync(ALARM_FILE)) {
   const t = readFileSync(ALARM_FILE, 'utf8');
-  const n = t.split(/\r?\n/).filter((l) => /^- \[/.test(l) && !l.includes('[测试]')).length;
+  const lines = t.split(/\r?\n/).filter((l) => /^- \[/.test(l) && !l.includes('[测试]'));
+  const benign = lines.filter((l) => BENIGN_ALARM_RE.test(l)).length;
+  const n = lines.length - benign;
+  if (benign > 0) inf('已知良性条目', `${benign} 条（可选依赖 dsh-llm 缺失 → fallback 构造，功能不降级）`);
   if (n > 0) wa('系统警报有未处理条目', `${n} 条 → ${ALARM_FILE}`);
-  else ok('系统警报', '无未处理条目');
+  else ok('系统警报', '无未处理条目（[测试] / 已知良性的不算）');
 } else ok('系统警报', '尚未创建（有错时才建）');
 
 function tail(s, n = 3) {
@@ -188,7 +201,7 @@ const stampNow = () => {
 console.log(`═══ inner-loop 独立体检 · ${stampNow()} ═══`);
 console.log(`平台 ${process.platform} ｜ node ${process.versions.node}`);
 for (const r of rows) console.log(`${r.s} ${r.n}${r.d ? '  — ' + r.d : ''}`);
-console.log(`\n合计：✅ ${rows.filter((r) => r.s === '✅').length} ｜ ⚠️ ${warn} ｜ ❌ ${fatal}`);
+console.log(`\n合计：✅ ${rows.filter((r) => r.s === '✅').length} ｜ ℹ️ ${info} ｜ ⚠️ ${warn} ｜ ❌ ${fatal}`);
 
 if (fatal > 0) {
   try {

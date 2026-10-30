@@ -74,3 +74,6 @@ coverage/
 
 # npm/pnpm 打包产物：只在 Release 挂，不进仓库
 *.tgz
+
+# local scratch scripts (port/patch artifacts), never in repo
+_staging/

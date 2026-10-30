@@ -15,6 +15,13 @@ import { createScopeResolver } from './scope.js';
 import { createIndexStore } from './index-store.js';
 import { createRetriever } from './retrieve.js';
 import { createDistiller, looksLikeToolDump } from './distill.js';
+import { createRadarState, renderChecklist, scanRulesDetailed } from './rules-radar.js';
+import {
+  a3Passed, checkA3Format, classifyCommand, classifyTool, createBreaker,
+  DEFAULT_EXECUTORS, denyReason, DEPRECATED_READONLY_RE, extractCommand,
+  nonReadonlyReason, normalizeToolName, readAssistantText, readonlyDeprecatedReason,
+  revokeNotice, unknownCommandReason,
+} from './rules-enforce.js';
 
 export const name = 'dsh-inner-loop';
 
@@ -29,6 +36,12 @@ const DEFAULT_CHECK_TEXT = `【内循环自检 · 每步一次，不输出给对
 4. 这是新问题，还是旧原则没执行？`;
 
 const MARKER = '【内循环自检';
+
+/**
+ * 工具结果的「出事了」判据。
+ * 只认能证伪的证据，不猜：非 0 退出码 / 明确的错误类型 / 权限或缺失。
+ */
+const BAD_RESULT_RE = /\[exit code: [1-9]\d*\]|^\s*(?:Syntax|Type|Reference|Range|URI)?Error:|ENOENT|EPERM|EACCES|文件不存在/i;
 
 export function buildReminder(text) {
   return `<system-reminder>\n${text}\n</system-reminder>`;
@@ -137,6 +150,15 @@ export function apply(ctx, rawConfig = {}) {
   __distiller = distiller;
   __conf = conf;
   alarm.trace(`apply ok enabled=${conf.enabled} topN=${retriever.topN} minHits=${retriever.minHits}`);
+
+  /* 雷达状态：铁律① —— 只 new 一次（每次 new 就是每次重置，精简模式永远不生效） */
+  const radarState = conf.radar
+    ? createRadarState({ calmAfterSteps: conf.radarCalmSteps })
+    : null;
+  /** 最近几轮调过的工具名，给雷达当"历史惯性"用 */
+  const recentTools = [];
+  /** A3 熔断：conf.enforce 默认 false，所以这条通常是 null（不注册拦截钩子） */
+  const breaker = conf.enforce === true ? createBreaker({ limit: conf.enforceLimit }) : null;
   const log = (...args) => {
     try { ctx.logger?.(name)?.debug?.(...args); } catch { /* 宿主 logger 不可用不影响对话 */ }
   };
@@ -173,6 +195,33 @@ export function apply(ctx, rawConfig = {}) {
           /* 检索自己崩了 → 也要让模型知道，而不是静默给个空 */
           alarm.noteError('pre-step:retrieve', e);
           body += '\n\n[系统提示：本轮记忆检索出错，可能无法获取完整历史，原因：检索组件异常]';
+        }
+      }
+
+      /* ── ①·B 动态规则路由：这一轮该把哪条细则拍在它脸上 ──
+       * 命中了就往 body 里叠清单；雷达自己崩了只记警报，绝不影响对话。 */
+      if (radarState && userText) {
+        try {
+          const det = scanRulesDetailed({ userText, toolNames: recentTools });
+          const ids = det.ids || [];
+          if (ids.length) {
+            const terse = conf.radarTerse && radarState.isTerse();
+            const rendered = renderChecklist(ids, undefined, {
+              terse,
+              maxPoints: conf.radarMaxPoints,
+            });
+            if (rendered.text) {
+              body += `\n\n${rendered.text}`;
+              for (const id of ids) radarState.markInjected(id, step);
+            }
+            alarm.trace(
+              `radar ids=${ids.join('+')} score=${det.intent?.score} terse=${terse} points=${rendered.points} why=${(det.intent?.reasons || []).join(',')}`,
+            );
+          } else {
+            alarm.trace(`radar none score=${det.intent?.score} why=${(det.intent?.reasons || []).join(',')}`);
+          }
+        } catch (e) {
+          alarm.noteError('pre-step:radar', e);
         }
       }
 
@@ -242,6 +291,107 @@ export function apply(ctx, rawConfig = {}) {
     alarm.trace('registered session/event distiller');
   }
 
+  /* ── ③ 雷达的痛觉：工具出错 → 立刻退出精简模式 ────────────
+   * 判据是「有没有出事」，不是「跑了几步」。
+   * 独立的 session/event 钩子，不吃 conf.distill 的开关。 */
+  if (radarState) {
+    ctx.on('session/event', (session, event) => {
+      try {
+        if (event?.type === 'tool/call') {
+          const n = String(event?.data?.name || '').toLowerCase();
+          if (n) {
+            recentTools.push(n);
+            if (recentTools.length > 8) recentTools.shift();
+          }
+          return;
+        }
+        if (event?.type !== 'tool/result') return;
+        const parts = event?.data?.message?.content ?? [];
+        const txt = parts.filter((p) => p?.type === 'text').map((p) => p.text).join('\n');
+        const bad = BAD_RESULT_RE.test(txt);
+        radarState.noteStep({ ok: !bad });
+        if (bad) alarm.trace(`radar 痛觉触发：工具结果像失败，退出精简 terse=${radarState.isTerse()}`);
+      } catch (e) {
+        alarm.noteError('session/event:radar', e);
+      }
+    });
+    alarm.trace('registered session/event radar-pain');
+  }
+
+  /* ── ④ 物理拦截：写工具执行前先看模型答没答 A3 清单 ────────
+   *
+   * 🔴 **默认关闭**（conf.enforce = false）。
+   * 2026-10-31 实机教训：开着它的时候，备份（Copy-Item）、改文件、连重启都被拒，
+   * 「答满清单就放行」这条根本没实现 —— 笼子把开锁的钥匙也锁在里面了。
+   *
+   * 现在的分级（打开后才会用）：
+   *   ① safe    已知只读前缀 / 插件体检查命令 → 直接放行，不计数
+   *   ② unknown 不在白名单也不危险 → 答满 A3 清单放行
+   *   ③ danger  带 ; | > && rm del → 答满清单也放行；只有用废弃 READONLY: 口令的才硬拦
+   */
+  if (breaker !== null) {
+    try {
+      ctx.on('tools/pre-execute', async (exec, next) => {
+        const decision = await next();
+        if (decision?.kind !== 'allow') return decision; // 别人已经拒了/取消了，不抢
+        try {
+          const toolName = normalizeToolName(exec?.name);
+          const executorSet = (Array.isArray(conf.executors) ? conf.executors : DEFAULT_EXECUTORS).map(normalizeToolName);
+          const isExecutor = executorSet.includes(toolName);
+          const cmd = isExecutor ? extractCommand(exec?.arguments) : '';
+
+          if (!isExecutor) {
+            const kind = classifyTool(exec?.name, exec?.arguments, {
+              readOnlyTools: Array.isArray(conf.readOnlyTools) ? conf.readOnlyTools : undefined,
+              customWriteTools: Array.isArray(conf.customWriteTools) ? conf.customWriteTools : undefined,
+              executors: Array.isArray(conf.executors) ? conf.executors : undefined,
+            });
+            if (kind === 'readonly') return decision;
+          } else {
+            const verdict = classifyCommand(cmd, { safeReadonlyPrefixes: conf.safeReadonlyPrefixes });
+            if (verdict === 'safe') {
+              alarm.trace(`enforce fast-path tool=${exec?.name ?? "?"} cmd=${String(cmd).slice(0, 80)}`);
+              return decision;
+            }
+            if (verdict === 'danger' && DEPRECATED_READONLY_RE.test(String(cmd))) {
+              alarm.trace(`enforce DENY(deprecated) tool=${exec?.name ?? "?"}`);
+              return { kind: "deny", reason: readonlyDeprecatedReason(exec?.name ?? "tool") };
+            }
+            if (verdict === 'danger') {
+              alarm.trace(`enforce danger-cmd tool=${exec?.name ?? "?"} → 退回 A3 清单`);
+            }
+          }
+
+          const session = exec?.agent?.session;
+          const said = readAssistantText(session);
+          // null = 读不到（接口缺失/异常）→ 放行，不许猜
+          if (said === null || said === undefined || said === "") return decision;
+          if (a3Passed(said)) return decision;
+
+          const info = checkA3Format(said);
+          const st = breaker.deny(session, 'A3');
+          if (st.revoked === true) {
+            alarm.noteError("enforce:revoke", new Error(`A3 连续 ${st.count} 次未答，写入权限已回收：${exec?.name ?? "?"}`));
+            return { kind: "deny", reason: revokeNotice(exec?.name ?? "tool", st.count) };
+          }
+          const isUnknownCmd = isExecutor && classifyCommand(cmd, { safeReadonlyPrefixes: conf.safeReadonlyPrefixes }) === "unknown";
+          const base = denyReason(info, exec?.name ?? "tool");
+          return {
+            kind: "deny",
+            reason: isUnknownCmd ? unknownCommandReason(exec?.name ?? "tool", cmd) + "\n\n" + base : base,
+          };
+        } catch (e) {
+          // 拦截器自己崩了 → 记警报 + 放行（绝不因为自己坏了而卡死工具）
+          alarm.noteError("pre-execute:enforce", e);
+          return decision;
+        }
+      });
+      alarm.trace('enforce tools/pre-execute registered');
+    } catch (e) {
+      alarm.noteError("enforce:register", e);
+    }
+  }
+
   log('inner-loop ready');
   alarm.trace('ready');
 }
@@ -259,4 +409,5 @@ export const __test__ = {
   fallbackUserMessage,
   lastUserText,
   alreadyInjected,
+  BAD_RESULT_RE,
 };
